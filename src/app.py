@@ -94,7 +94,7 @@ def df_to_quartzy_requests(df: pd.DataFrame) -> List[QuartzyRequest]:
             name=row["名称"],
             vendor_name=row["供应商"],
             catalog_number=row["货号"],
-            price={"amount": str(row["单价"] * 100), "currency": "CNY"},
+            price={"amount": str(row["单价"] * 100), "currency": "N/A"},
             quantity=row["数量"],
             # notes: date, unit, comment
             notes=f"Date: {row['时间']}, comment: {row['备注']}, unit: {row['单位']}",
