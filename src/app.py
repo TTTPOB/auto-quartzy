@@ -19,7 +19,6 @@ from config import (
     QUARTZY_API_TOKEN,
     QUARTZY_LAB_ID,
     QUARTZY_TYPE_ID,
-    RECEIPT_ARCHIVE_DIR,
 )
 from models import QuartzyRequest, Receipt
 
@@ -44,8 +43,6 @@ Thermo
 
 单位这个field要把规格也一起放进来
 """
-
-Path(RECEIPT_ARCHIVE_DIR).mkdir(exist_ok=True)
 
 
 def parse_receipt_image(image_path: str) -> Receipt:
