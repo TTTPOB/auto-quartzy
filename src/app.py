@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import os
 from datetime import datetime
@@ -45,24 +46,28 @@ Thermo
 """
 
 
-def parse_receipt_image(image_path: str) -> Receipt:
+def gr_img_to_b64(img: gr.Image):
+    pil_img = Image.fromarray(img.astype("uint8"), "RGB")
+    buf = io.BytesIO()
+    pil_img.save(buf, format="JPEG")
+    b64str = base64.b64encode(buf.getvalue()).decode("utf-8")
+    # make it suitable for llm submission
+    mime_type = "image/jpeg"
+    b64str = f"data:{mime_type};base64,{b64str}"
+    return b64str
+
+
+def parse_receipt_image(img) -> Receipt:
     model = init_chat_model(
         model=OPENROUTER_MODEL,
         api_key=OPENROUTER_API_KEY,
         model_provider="openai",
     ).with_structured_output(Receipt, method="function_calling")
 
-    ext = os.path.splitext(image_path)[-1].lower().replace(".", "") or "jpeg"
-    mime_type = f"image/{'jpeg' if ext == 'jpg' else ext}"
-
-    with open(image_path, "rb") as img_file:
-        img_bytes = img_file.read()
-        img_base64 = base64.b64encode(img_bytes).decode("utf-8")
-
     message = HumanMessage(
         content=[
             {"type": "text", "text": img_prompt},
-            {"type": "image_url", "image_url": f"data:{mime_type};base64,{img_base64}"},
+            {"type": "image_url", "image_url": gr_img_to_b64(img)},
         ]
     )
     response = model.invoke([message])
@@ -91,7 +96,7 @@ def df_to_quartzy_requests(df: pd.DataFrame) -> List[QuartzyRequest]:
             name=row["名称"],
             vendor_name=row["供应商"],
             catalog_number=row["货号"],
-            price={"amount": str(row["单价"] * 100), "currency": "N/A"},
+            price={"amount": str(row["单价"] * 100), "currency": "CNY"},
             quantity=row["数量"],
             # notes: date, unit, comment
             notes=f"Date: {row['时间']}, comment: {row['备注']}, unit: {row['单位']}",
@@ -104,12 +109,10 @@ def show_uploaded_image(file: gr.File) -> Image.Image:
     return Image.open(file.name)
 
 
-def process_receipts(file: gr.File) -> tuple:
-    file_path = file.name
-    receipt = parse_receipt_image(file_path)
+def process_receipts(img: gr.Image) -> tuple:
+    receipt = parse_receipt_image(img)
     df_data = to_dataframe(receipt)
-    image_pil = Image.open(file_path)
-    return image_pil, df_data, receipt.model_dump(), receipt
+    return df_data, receipt.model_dump()
 
 
 def submit_all(edited_table: pd.DataFrame) -> Dict:
@@ -124,19 +127,14 @@ def submit_all(edited_table: pd.DataFrame) -> Dict:
             json=req.model_dump(),
         )
         results.append(response.json())
-    return {"submitted": results}
+    return results
 
 
 with gr.Blocks() as demo:
     gr.Markdown("# 收据识别与库存提交")
 
     with gr.Row():
-        file_input = gr.File(
-            label="上传收据图片", file_types=[".jpg", ".jpeg", ".png", ".webp"]
-        )
-        image_view = gr.Image(label="原始收据预览")
-
-    file_input.change(fn=show_uploaded_image, inputs=[file_input], outputs=[image_view])
+        img_input = gr.Image(label="上传收据图片")
 
     with gr.Row():
         table = gr.Dataframe(
@@ -154,8 +152,8 @@ with gr.Blocks() as demo:
 
     process_btn.click(
         fn=process_receipts,
-        inputs=[file_input],
-        outputs=[image_view, table, hidden_json],
+        inputs=[img_input],
+        outputs=[table, hidden_json],
     )
 
     submit_btn.click(fn=submit_all, inputs=[table], outputs=[result_box])
