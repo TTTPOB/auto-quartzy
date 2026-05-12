@@ -567,7 +567,7 @@ def main() -> None:
                 in {"未识别", "识别失败"}
                 for file_id in current_ids
             )
-            if st.button("识别全部", disabled=all_disabled, use_container_width=True):
+            if st.button("识别全部", disabled=all_disabled, width="stretch"):
                 for file_id in current_ids:
                     record = st.session_state.receipts[file_id]
                     if record["parse_status"] in {"未识别", "识别失败"}:
@@ -577,7 +577,7 @@ def main() -> None:
             if st.button(
                 "刷新",
                 disabled=active_parse_count == 0,
-                use_container_width=True,
+                width="stretch",
             ):
                 st.rerun()
 
@@ -608,7 +608,7 @@ def main() -> None:
                         "选择",
                         key=f"select_{file_id}",
                         disabled=selected,
-                        use_container_width=True,
+                        width="stretch",
                         on_click=select_receipt,
                         args=(file_id,),
                     )
@@ -627,7 +627,7 @@ def main() -> None:
         edited_table = st.data_editor(
             record["df"],
             num_rows="dynamic",
-            use_container_width=True,
+            width="stretch",
             height=dataframe_editor_height(record["df"]),
             key=f"receipt_editor_{record['id']}_{record['editor_version']}",
         )
@@ -637,7 +637,7 @@ def main() -> None:
         if record["submit_result"] is not None:
             st.json(record["submit_result"])
         else:
-            st.image(record["image"], use_container_width=True)
+            st.image(record["image"], width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
 
         with action_bar:
@@ -647,7 +647,7 @@ def main() -> None:
                 if st.button(
                     "识别当前收据",
                     disabled=parsing_current,
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     submit_parse_task(record)
                     st.rerun()
@@ -655,7 +655,7 @@ def main() -> None:
                 if st.button(
                     "提交",
                     disabled=edited_table.empty,
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     with st.spinner("正在提交至 Quartzy..."):
                         (
