@@ -329,6 +329,10 @@ def submit_parse_task(record: Dict) -> bool:
     return True
 
 
+def select_receipt(file_id: str) -> None:
+    st.session_state.selected_receipt_id = file_id
+
+
 def main() -> None:
     st.set_page_config(page_title="收据识别与库存提交", layout="wide")
     st.markdown(
@@ -365,35 +369,32 @@ def main() -> None:
         div[data-testid="stImage"] img {
             object-fit: contain;
         }
-        .receipt-gallery-item {
-            display: block;
-            border: 1px solid rgba(49, 51, 63, 0.2);
-            border-radius: 6px;
-            padding: 0.35rem;
-            margin-bottom: 0.65rem;
-            color: inherit;
-            text-decoration: none;
+        .receipt-gallery-card {
+            border: 1px solid rgba(128, 128, 128, 0.28);
+            border-radius: 7px;
+            padding: 7px;
+            box-sizing: border-box;
         }
-        .receipt-gallery-item:hover {
-            border-color: rgba(49, 51, 63, 0.55);
-            background: rgba(49, 51, 63, 0.04);
-        }
-        .receipt-gallery-item.selected {
+        .receipt-gallery-card.selected {
             border-color: #ff4b4b;
-            background: rgba(255, 75, 75, 0.08);
+            box-shadow: inset 0 0 0 2px #ff4b4b;
         }
-        .receipt-gallery-item img {
-            display: block;
-            width: 100%;
-            max-height: 150px;
+        .receipt-gallery-card img {
+            max-height: 155px;
             object-fit: contain;
         }
         .receipt-gallery-caption {
-            margin-top: 0.35rem;
-            font-size: 0.82rem;
+            margin-top: 0.45rem;
+            font-size: 0.92rem;
             line-height: 1.35;
             overflow-wrap: anywhere;
+        }
+        .receipt-gallery-select button {
+            min-height: 155px;
+            padding: 0.5rem 0.25rem;
             white-space: normal;
+            word-break: keep-all;
+            line-height: 1.35;
         }
         .receipt-preview div[data-testid="stImage"] img {
             max-height: 520px;
@@ -418,10 +419,6 @@ def main() -> None:
         st.session_state.selected_receipt_id = None
 
     collect_parse_results()
-
-    selected_from_query = st.query_params.get("selected")
-    if selected_from_query in st.session_state.receipts:
-        st.session_state.selected_receipt_id = selected_from_query
 
     with left_col:
         uploaded_files = st.file_uploader(
@@ -492,23 +489,37 @@ def main() -> None:
             ):
                 st.rerun()
 
-        st.markdown('<div class="receipt-gallery">', unsafe_allow_html=True)
         for file_id in current_ids:
             gallery_record = st.session_state.receipts[file_id]
             selected = file_id == st.session_state.selected_receipt_id
-            item_class = "receipt-gallery-item selected" if selected else "receipt-gallery-item"
-            st.markdown(
-                (
-                    f'<a class="{item_class}" href="?selected={file_id}">'
-                    f'<img src="{gallery_record["thumbnail_url"]}" alt="">'
-                    f'<div class="receipt-gallery-caption">'
-                    f'{html.escape(gallery_record["name"])}'
-                    f'<br>{html.escape(gallery_record["parse_status"])}'
-                    "</div></a>"
-                ),
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
+            card_class = "receipt-gallery-card selected" if selected else "receipt-gallery-card"
+            image_col, select_col = st.columns([5, 1], gap="small")
+            with image_col:
+                st.markdown(
+                    (
+                        f'<div class="{card_class}">'
+                        f'<img src="{gallery_record["thumbnail_url"]}" alt="">'
+                        f'<div class="receipt-gallery-caption">'
+                        f'{html.escape(gallery_record["name"])} '
+                        f'{html.escape(gallery_record["parse_status"])}'
+                        "</div></div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+            with select_col:
+                st.markdown(
+                    '<div class="receipt-gallery-select">',
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    "选择",
+                    key=f"select_{file_id}",
+                    disabled=selected,
+                    use_container_width=True,
+                    on_click=select_receipt,
+                    args=(file_id,),
+                )
+                st.markdown("</div>", unsafe_allow_html=True)
 
     record = st.session_state.receipts[st.session_state.selected_receipt_id]
 
