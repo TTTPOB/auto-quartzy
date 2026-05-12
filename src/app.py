@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Dict, List
 from uuid import uuid4
 
-import gradio as gr
 import httpx
 import pandas as pd
+import streamlit as st
 from PIL import Image
 
 from config import (
@@ -51,14 +51,14 @@ Thermo
 """
 
 
-def gr_img_to_bytes(img: gr.Image) -> bytes:
-    pil_img = Image.fromarray(img.astype("uint8"), "RGB")
+def image_to_jpeg_bytes(img: Image.Image) -> bytes:
+    pil_img = img.convert("RGB")
     buf = io.BytesIO()
     pil_img.save(buf, format="JPEG")
     return buf.getvalue()
 
 
-def mineru_parse_markdown(img: gr.Image) -> str:
+def mineru_parse_markdown(img: Image.Image) -> str:
     if not MINERU_API_KEY:
         raise ValueError("MINERU_API_KEY is not configured")
 
@@ -89,7 +89,7 @@ def mineru_parse_markdown(img: gr.Image) -> str:
 
         batch_id = created["data"]["batch_id"]
         upload_url = created["data"]["file_urls"][0]
-        upload_response = client.put(upload_url, content=gr_img_to_bytes(img))
+        upload_response = client.put(upload_url, content=image_to_jpeg_bytes(img))
         upload_response.raise_for_status()
 
         result = None
@@ -207,11 +207,7 @@ def df_to_quartzy_requests(df: pd.DataFrame) -> List[QuartzyRequest]:
     return requests
 
 
-def show_uploaded_image(file: gr.File) -> Image.Image:
-    return Image.open(file.name)
-
-
-def process_receipts(img: gr.Image) -> tuple:
+def process_receipts(img: Image.Image) -> tuple:
     receipt = parse_receipt_image(img)
     df_data = to_dataframe(receipt)
     return df_data, receipt.model_dump()
@@ -232,33 +228,51 @@ def submit_all(edited_table: pd.DataFrame) -> Dict:
     return results
 
 
-with gr.Blocks() as demo:
-    gr.Markdown("# 收据识别与库存提交")
+def main() -> None:
+    st.set_page_config(page_title="收据识别与库存提交", layout="wide")
+    st.title("收据识别与库存提交")
 
-    with gr.Row():
-        img_input = gr.Image(label="上传收据图片")
-
-    with gr.Row():
-        table = gr.Dataframe(
-            headers=DF_COLNAMES,
-            label="识别商品列表（可修改）",
-            interactive=True,
-            row_count="dynamic",
-            col_count=8,
-        )
-
-    hidden_json = gr.JSON(visible=False)
-    process_btn = gr.Button("识别收据")
-    submit_btn = gr.Button("提交至 Quartzy")
-    result_box = gr.JSON(label="API提交结果")
-
-    process_btn.click(
-        fn=process_receipts,
-        inputs=[img_input],
-        outputs=[table, hidden_json],
+    uploaded_file = st.file_uploader(
+        "上传收据图片",
+        type=["jpg", "jpeg", "png", "webp"],
     )
 
-    submit_btn.click(fn=submit_all, inputs=[table], outputs=[result_box])
+    image = None
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file).convert("RGB")
+        st.image(image, caption=uploaded_file.name, use_container_width=True)
+
+    if "receipt_df" not in st.session_state:
+        st.session_state.receipt_df = pd.DataFrame(columns=DF_COLNAMES)
+    if "receipt_json" not in st.session_state:
+        st.session_state.receipt_json = None
+    if "submit_result" not in st.session_state:
+        st.session_state.submit_result = None
+    if "receipt_editor_version" not in st.session_state:
+        st.session_state.receipt_editor_version = 0
+
+    if st.button("识别收据", disabled=image is None):
+        with st.spinner("正在识别收据..."):
+            df_data, receipt_json = process_receipts(image)
+        st.session_state.receipt_df = df_data
+        st.session_state.receipt_json = receipt_json
+        st.session_state.submit_result = None
+        st.session_state.receipt_editor_version += 1
+
+    edited_table = st.data_editor(
+        st.session_state.receipt_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        key=f"receipt_editor_{st.session_state.receipt_editor_version}",
+    )
+
+    if st.button("提交至 Quartzy", disabled=edited_table.empty):
+        with st.spinner("正在提交至 Quartzy..."):
+            st.session_state.submit_result = submit_all(edited_table)
+
+    if st.session_state.submit_result is not None:
+        st.json(st.session_state.submit_result)
+
 
 if __name__ == "__main__":
-    demo.launch()
+    main()
