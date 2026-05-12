@@ -422,6 +422,22 @@ def submit_parse_task(record: Dict) -> bool:
     return True
 
 
+def rotate_receipt_image(record: Dict) -> None:
+    future = record.get("parse_future")
+    if future is not None and not future.done():
+        return
+
+    record["image"] = record["image"].rotate(-90, expand=True)
+    record["thumbnail_url"] = image_to_data_url(record["image"])
+    record["df"] = pd.DataFrame(columns=DF_COLNAMES)
+    record["json"] = None
+    record["submit_result"] = None
+    record["quartzy_uploaded_file"] = None
+    record["editor_version"] += 1
+    record["parse_status"] = "未识别"
+    record["parse_error"] = None
+
+
 def select_receipt(file_id: str) -> None:
     st.session_state.selected_receipt_id = file_id
 
@@ -644,6 +660,17 @@ def main() -> None:
             record["df"] = edited_table.copy()
             record["editor_version"] += 1
             st.rerun()
+
+        preview_action_cols = st.columns([5, 1], gap="small")
+        with preview_action_cols[1]:
+            if st.button(
+                "旋转",
+                disabled=record.get("parse_future") is not None,
+                width="stretch",
+                key=f"rotate_{record['id']}",
+            ):
+                rotate_receipt_image(record)
+                st.rerun()
 
         st.markdown('<div class="receipt-preview">', unsafe_allow_html=True)
         if record["submit_result"] is not None:
