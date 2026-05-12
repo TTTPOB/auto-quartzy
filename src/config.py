@@ -14,7 +14,11 @@ MINERU_API_BASE = os.getenv("MINERU_API_BASE", "https://mineru.net")
 
 # Quartzy API settings
 QUARTZY_API_TOKEN = os.getenv("QUARTZY_API_TOKEN")
+QUARTZY_AUTH0_ACCESS_TOKEN = os.getenv("QUARTZY_AUTH0_ACCESS_TOKEN") or os.getenv(
+    "QUARTZY_GRAPHQL_JWT"
+)
 QUARTZY_API_BASE = "https://api.quartzy.com"
+QUARTZY_GRAPHQL_URL = os.getenv("QUARTZY_GRAPHQL_URL", "https://graphql.quartzy.com/")
 QUARTZY_LAB_ID = os.getenv("QUARTZY_LAB_ID")
 QUARTZY_TYPE_ID = os.getenv("QUARTZY_TYPE_ID")
 

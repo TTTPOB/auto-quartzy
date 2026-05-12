@@ -28,6 +28,12 @@ from config import (
     QUARTZY_TYPE_ID,
 )
 from models import QuartzyRequest, Receipt
+from quartzy_upload import (
+    QuartzyUploadedFile,
+    attach_uploaded_file_to_order_request,
+    attachment_filename,
+    upload_receipt_image,
+)
 
 DF_COLNAMES = ["名称", "货号", "数量", "单位", "单价", "供应商", "备注", "时间"]
 MINERU_POLL_INTERVAL_SECONDS = 5
@@ -231,8 +237,29 @@ def process_receipts(img: Image.Image) -> tuple:
     return df_data, receipt.model_dump()
 
 
-def submit_all(edited_table: pd.DataFrame) -> Dict:
+def submit_all(
+    edited_table: pd.DataFrame,
+    receipt_image: Image.Image,
+    receipt_name: str,
+    uploaded_file: QuartzyUploadedFile | None = None,
+) -> tuple[List[Dict], QuartzyUploadedFile | None]:
     results = []
+    if uploaded_file is None:
+        try:
+            uploaded_file = upload_receipt_image(
+                image_to_jpeg_bytes(receipt_image),
+                attachment_filename(receipt_name),
+                "image/jpeg",
+            )
+        except Exception as exc:
+            return [
+                {
+                    "order_request": None,
+                    "attachment": None,
+                    "error": f"Receipt image upload failed before creating order requests: {exc}",
+                }
+            ], None
+
     for req in df_to_quartzy_requests(pd.DataFrame(edited_table, columns=DF_COLNAMES)):
         response = httpx.post(
             f"{QUARTZY_API_BASE}/order-requests",
@@ -242,8 +269,63 @@ def submit_all(edited_table: pd.DataFrame) -> Dict:
             },
             json=req.model_dump(),
         )
-        results.append(response.json())
-    return results
+        try:
+            response.raise_for_status()
+            order_result = response.json()
+        except Exception as exc:
+            results.append(
+                {
+                    "request": req.model_dump(),
+                    "order_request": None,
+                    "attachment": None,
+                    "error": str(exc),
+                }
+            )
+            continue
+
+        attachment_result = None
+        attachment_error = None
+        order_request_id, order_request_id_source = extract_order_request_uuid(order_result)
+        if uploaded_file is not None and order_request_id:
+            try:
+                attachment_result = attach_uploaded_file_to_order_request(
+                    uploaded_file.file_id,
+                    order_request_id,
+                )
+                attachment_error = None
+            except Exception as exc:
+                attachment_error = str(exc)
+        elif uploaded_file is not None:
+            attachment_error = (
+                "Could not find the UUID required by "
+                "attachFileToOrderRequest.input.orderRequestId in Quartzy API response."
+            )
+
+        results.append(
+            {
+                "request": req.model_dump(),
+                "order_request": order_result,
+                "order_request_id": order_request_id,
+                "order_request_id_source": order_request_id_source,
+                "attachment": attachment_result,
+                "attachment_error": attachment_error,
+                "reused_file_id": uploaded_file.file_id if uploaded_file else None,
+            }
+        )
+    return results, uploaded_file
+
+
+def extract_order_request_uuid(value) -> tuple[str | None, str | None]:
+    if not isinstance(value, dict) or not is_uuid_like(value.get("id")):
+        return None, None
+    return value["id"], "id"
+
+
+def is_uuid_like(value) -> bool:
+    if not isinstance(value, str) or len(value) != 36:
+        return False
+    parts = value.split("-")
+    return [len(part) for part in parts] == [8, 4, 4, 4, 12]
 
 
 def uploaded_file_id(file) -> str:
@@ -277,6 +359,7 @@ def empty_receipt_record(file_id: str, name: str, image: Image.Image) -> Dict:
         "df": pd.DataFrame(columns=DF_COLNAMES),
         "json": None,
         "submit_result": None,
+        "quartzy_uploaded_file": None,
         "editor_version": 0,
         "parse_future": None,
         "parse_status": "未识别",
@@ -567,7 +650,15 @@ def main() -> None:
             use_container_width=True,
         ):
             with st.spinner("正在提交至 Quartzy..."):
-                record["submit_result"] = submit_all(edited_table)
+                (
+                    record["submit_result"],
+                    record["quartzy_uploaded_file"],
+                ) = submit_all(
+                    edited_table,
+                    record["image"],
+                    record["name"],
+                    record.get("quartzy_uploaded_file"),
+                )
             st.rerun()
 
     if active_parse_count:
