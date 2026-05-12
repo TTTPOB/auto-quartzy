@@ -90,14 +90,14 @@ def upload_receipt_image(
 
 
 def attach_uploaded_file_to_order_request(
-    file_id: str,
+    file_uuid: str,
     order_request_id: str,
 ) -> dict[str, Any]:
     data = _graphql(
         ATTACH_FILE_TO_ORDER_REQUEST_MUTATION,
         {
             "input": {
-                "fileId": file_id,
+                "fileId": file_uuid,
                 "orderRequestId": order_request_id,
             }
         },

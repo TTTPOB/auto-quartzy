@@ -288,14 +288,17 @@ def submit_all(
         attachment_error = None
         order_request_id, order_request_id_source = extract_order_request_uuid(order_result)
         if uploaded_file is not None and order_request_id:
-            try:
-                attachment_result = attach_uploaded_file_to_order_request(
-                    uploaded_file.file_id,
-                    order_request_id,
-                )
-                attachment_error = None
-            except Exception as exc:
-                attachment_error = str(exc)
+            if not uploaded_file.uuid:
+                attachment_error = "Quartzy createFile response did not include file uuid."
+            else:
+                try:
+                    attachment_result = attach_uploaded_file_to_order_request(
+                        uploaded_file.uuid,
+                        order_request_id,
+                    )
+                    attachment_error = None
+                except Exception as exc:
+                    attachment_error = str(exc)
         elif uploaded_file is not None:
             attachment_error = (
                 "Could not find the UUID required by "
@@ -311,6 +314,7 @@ def submit_all(
                 "attachment": attachment_result,
                 "attachment_error": attachment_error,
                 "reused_file_id": uploaded_file.file_id if uploaded_file else None,
+                "reused_file_uuid": uploaded_file.uuid if uploaded_file else None,
             }
         )
     return results, uploaded_file
