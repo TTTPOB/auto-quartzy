@@ -1,8 +1,10 @@
+import hashlib
 import io
 import json
 import tempfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List
 from uuid import uuid4
@@ -28,6 +30,8 @@ from models import QuartzyRequest, Receipt
 DF_COLNAMES = ["名称", "货号", "数量", "单位", "单价", "供应商", "备注", "时间"]
 MINERU_POLL_INTERVAL_SECONDS = 5
 MINERU_MAX_POLLS = 60
+GALLERY_COLUMNS = 4
+MAX_PARSE_CONCURRENCY = 5
 
 receipt_markdown_prompt = """
 请从下面的收据 Markdown 中抽取信息，输出必须严格符合给定 JSON schema。
@@ -228,50 +232,184 @@ def submit_all(edited_table: pd.DataFrame) -> Dict:
     return results
 
 
+def uploaded_file_id(file) -> str:
+    return hashlib.sha256(file.getvalue()).hexdigest()
+
+
+def empty_receipt_record(file_id: str, name: str, image: Image.Image) -> Dict:
+    return {
+        "id": file_id,
+        "name": name,
+        "image": image,
+        "df": pd.DataFrame(columns=DF_COLNAMES),
+        "json": None,
+        "submit_result": None,
+        "editor_version": 0,
+        "parse_future": None,
+        "parse_status": "未识别",
+        "parse_error": None,
+    }
+
+
+def get_parse_executor() -> ThreadPoolExecutor:
+    if "parse_executor" not in st.session_state:
+        st.session_state.parse_executor = ThreadPoolExecutor(
+            max_workers=MAX_PARSE_CONCURRENCY
+        )
+    return st.session_state.parse_executor
+
+
+def collect_parse_results() -> None:
+    for record in st.session_state.receipts.values():
+        future = record.get("parse_future")
+        if future is None or not future.done():
+            continue
+
+        try:
+            df_data, receipt_json = future.result()
+        except Exception as exc:
+            record["parse_status"] = "识别失败"
+            record["parse_error"] = str(exc)
+        else:
+            record["df"] = df_data
+            record["json"] = receipt_json
+            record["submit_result"] = None
+            record["editor_version"] += 1
+            record["parse_status"] = "已识别"
+            record["parse_error"] = None
+        finally:
+            record["parse_future"] = None
+
+
+def submit_parse_task(record: Dict) -> bool:
+    future = record.get("parse_future")
+    if future is not None and not future.done():
+        return False
+
+    record["parse_status"] = "识别中"
+    record["parse_error"] = None
+    record["submit_result"] = None
+    record["parse_future"] = get_parse_executor().submit(
+        process_receipts,
+        record["image"].copy(),
+    )
+    return True
+
+
 def main() -> None:
     st.set_page_config(page_title="收据识别与库存提交", layout="wide")
     st.title("收据识别与库存提交")
 
-    uploaded_file = st.file_uploader(
+    uploaded_files = st.file_uploader(
         "上传收据图片",
         type=["jpg", "jpeg", "png", "webp"],
+        accept_multiple_files=True,
     )
 
-    image = None
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file).convert("RGB")
-        st.image(image, caption=uploaded_file.name, use_container_width=True)
+    if "receipts" not in st.session_state:
+        st.session_state.receipts = {}
+    if "receipt_order" not in st.session_state:
+        st.session_state.receipt_order = []
+    if "selected_receipt_id" not in st.session_state:
+        st.session_state.selected_receipt_id = None
 
-    if "receipt_df" not in st.session_state:
-        st.session_state.receipt_df = pd.DataFrame(columns=DF_COLNAMES)
-    if "receipt_json" not in st.session_state:
-        st.session_state.receipt_json = None
-    if "submit_result" not in st.session_state:
-        st.session_state.submit_result = None
-    if "receipt_editor_version" not in st.session_state:
-        st.session_state.receipt_editor_version = 0
+    collect_parse_results()
 
-    if st.button("识别收据", disabled=image is None):
-        with st.spinner("正在识别收据..."):
-            df_data, receipt_json = process_receipts(image)
-        st.session_state.receipt_df = df_data
-        st.session_state.receipt_json = receipt_json
-        st.session_state.submit_result = None
-        st.session_state.receipt_editor_version += 1
+    current_ids = []
+    for uploaded_file in uploaded_files:
+        file_id = uploaded_file_id(uploaded_file)
+        current_ids.append(file_id)
+        if file_id not in st.session_state.receipts:
+            image = Image.open(uploaded_file).convert("RGB")
+            st.session_state.receipts[file_id] = empty_receipt_record(
+                file_id,
+                uploaded_file.name,
+                image,
+            )
+
+    st.session_state.receipt_order = current_ids
+    for file_id in list(st.session_state.receipts):
+        if file_id not in current_ids:
+            del st.session_state.receipts[file_id]
+
+    if (
+        st.session_state.selected_receipt_id not in st.session_state.receipts
+        and current_ids
+    ):
+        st.session_state.selected_receipt_id = current_ids[0]
+    if not current_ids:
+        st.session_state.selected_receipt_id = None
+
+    if not current_ids:
+        st.info("上传一张或多张收据图片后开始识别。")
+        return
+
+    control_cols = st.columns([1, 1, 3])
+    with control_cols[0]:
+        if st.button("识别全部未识别", disabled=not current_ids):
+            for file_id in current_ids:
+                record = st.session_state.receipts[file_id]
+                if record["parse_status"] in {"未识别", "识别失败"}:
+                    submit_parse_task(record)
+            st.rerun()
+    with control_cols[1]:
+        active_parse_count = sum(
+            1
+            for record in st.session_state.receipts.values()
+            if record.get("parse_future") is not None
+        )
+        if st.button("刷新状态", disabled=active_parse_count == 0):
+            st.rerun()
+
+    st.subheader("图片")
+    for offset in range(0, len(current_ids), GALLERY_COLUMNS):
+        cols = st.columns(GALLERY_COLUMNS)
+        for col, file_id in zip(cols, current_ids[offset : offset + GALLERY_COLUMNS]):
+            record = st.session_state.receipts[file_id]
+            with col:
+                st.image(record["image"], caption=record["name"], use_container_width=True)
+                st.caption(record["parse_status"])
+                selected = file_id == st.session_state.selected_receipt_id
+                if st.button(
+                    "当前" if selected else "选择",
+                    key=f"select_{file_id}",
+                    disabled=selected,
+                    use_container_width=True,
+                ):
+                    st.session_state.selected_receipt_id = file_id
+                    st.rerun()
+
+    record = st.session_state.receipts[st.session_state.selected_receipt_id]
+
+    st.divider()
+    st.subheader(record["name"])
+
+    parsing_current = record.get("parse_future") is not None
+    if st.button("识别当前收据", disabled=parsing_current):
+        submit_parse_task(record)
+        st.rerun()
+
+    if record["parse_error"]:
+        st.error(record["parse_error"])
 
     edited_table = st.data_editor(
-        st.session_state.receipt_df,
+        record["df"],
         num_rows="dynamic",
         use_container_width=True,
-        key=f"receipt_editor_{st.session_state.receipt_editor_version}",
+        key=f"receipt_editor_{record['id']}_{record['editor_version']}",
     )
+    record["df"] = edited_table
 
     if st.button("提交至 Quartzy", disabled=edited_table.empty):
         with st.spinner("正在提交至 Quartzy..."):
-            st.session_state.submit_result = submit_all(edited_table)
+            record["submit_result"] = submit_all(edited_table)
 
-    if st.session_state.submit_result is not None:
-        st.json(st.session_state.submit_result)
+    if record["submit_result"] is not None:
+        st.json(record["submit_result"])
+
+    if active_parse_count:
+        time.sleep(1)
+        st.rerun()
 
 
 if __name__ == "__main__":
