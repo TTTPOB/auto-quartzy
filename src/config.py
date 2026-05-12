@@ -3,9 +3,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# OpenRouter API settings
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3-opus-20240229")
+# DeepSeek API settings
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+DEEPSEEK_API_BASE = os.getenv("DEEPSEEK_API_BASE", "https://api.deepseek.com")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+
+# MinerU API settings
+MINERU_API_KEY = os.getenv("MINERU_API_KEY")
+MINERU_API_BASE = os.getenv("MINERU_API_BASE", "https://mineru.net")
 
 # Quartzy API settings
 QUARTZY_API_TOKEN = os.getenv("QUARTZY_API_TOKEN")

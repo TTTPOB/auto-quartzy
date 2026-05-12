@@ -1,21 +1,23 @@
-import base64
 import io
 import json
-import os
-from datetime import datetime
+import tempfile
+import time
+import zipfile
 from pathlib import Path
 from typing import Dict, List
+from uuid import uuid4
 
 import gradio as gr
 import httpx
 import pandas as pd
-from langchain.chat_models import init_chat_model
-from langchain_core.messages import HumanMessage
 from PIL import Image
 
 from config import (
-    OPENROUTER_API_KEY,
-    OPENROUTER_MODEL,
+    DEEPSEEK_API_BASE,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_MODEL,
+    MINERU_API_BASE,
+    MINERU_API_KEY,
     QUARTZY_API_BASE,
     QUARTZY_API_TOKEN,
     QUARTZY_LAB_ID,
@@ -24,10 +26,13 @@ from config import (
 from models import QuartzyRequest, Receipt
 
 DF_COLNAMES = ["名称", "货号", "数量", "单位", "单价", "供应商", "备注", "时间"]
+MINERU_POLL_INTERVAL_SECONDS = 5
+MINERU_MAX_POLLS = 60
 
-img_prompt = """
-请解析这张收据图片中的信息，
-包括日期、供应商、商品列表（名称、数量、货号、单位、单价）和总金额, 备注。
+receipt_markdown_prompt = """
+请从下面的收据 Markdown 中抽取信息，输出必须严格符合给定 JSON schema。
+
+需要抽取日期、供应商、商品列表（名称、数量、货号、单位、单价）和总金额、备注。
 如果你发现某项解析不对，在里面填上对应类型的错误值。
 一些常见的供应商
 生工
@@ -46,32 +51,129 @@ Thermo
 """
 
 
-def gr_img_to_b64(img: gr.Image):
+def gr_img_to_bytes(img: gr.Image) -> bytes:
     pil_img = Image.fromarray(img.astype("uint8"), "RGB")
     buf = io.BytesIO()
     pil_img.save(buf, format="JPEG")
-    b64str = base64.b64encode(buf.getvalue()).decode("utf-8")
-    # make it suitable for llm submission
-    mime_type = "image/jpeg"
-    b64str = f"data:{mime_type};base64,{b64str}"
-    return b64str
+    return buf.getvalue()
+
+
+def mineru_parse_markdown(img: gr.Image) -> str:
+    if not MINERU_API_KEY:
+        raise ValueError("MINERU_API_KEY is not configured")
+
+    base_url = MINERU_API_BASE.rstrip("/")
+    headers = {
+        "Authorization": f"Bearer {MINERU_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    filename = f"receipt-{uuid4().hex}.jpg"
+    payload = {
+        "files": [{"name": filename, "data_id": filename, "is_ocr": True}],
+        "model_version": "vlm",
+        "language": "ch",
+        "enable_table": True,
+        "enable_formula": False,
+    }
+
+    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+        response = client.post(
+            f"{base_url}/api/v4/file-urls/batch",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        created = response.json()
+        if created.get("code") != 0:
+            raise RuntimeError(f"MinerU create task failed: {created}")
+
+        batch_id = created["data"]["batch_id"]
+        upload_url = created["data"]["file_urls"][0]
+        upload_response = client.put(upload_url, content=gr_img_to_bytes(img))
+        upload_response.raise_for_status()
+
+        result = None
+        for _ in range(MINERU_MAX_POLLS):
+            poll_response = client.get(
+                f"{base_url}/api/v4/extract-results/batch/{batch_id}",
+                headers=headers,
+            )
+            poll_response.raise_for_status()
+            result = poll_response.json()
+            if result.get("code") != 0:
+                raise RuntimeError(f"MinerU parse failed: {result}")
+
+            items = result.get("data", {}).get("extract_result") or []
+            if items and all(item.get("state") in {"done", "failed"} for item in items):
+                break
+            time.sleep(MINERU_POLL_INTERVAL_SECONDS)
+        else:
+            raise TimeoutError(f"MinerU parse timed out: {batch_id}")
+
+        item = (result.get("data", {}).get("extract_result") or [])[0]
+        if item.get("state") != "done":
+            raise RuntimeError(f"MinerU parse did not complete: {item}")
+
+        zip_response = client.get(item["full_zip_url"])
+        zip_response.raise_for_status()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        zip_path = Path(tmpdir) / "mineru_output.zip"
+        zip_path.write_bytes(zip_response.content)
+        with zipfile.ZipFile(zip_path) as archive:
+            try:
+                return archive.read("full.md").decode("utf-8")
+            except KeyError as exc:
+                raise RuntimeError("MinerU output did not include full.md") from exc
+
+
+def extract_receipt_from_markdown(markdown: str) -> Receipt:
+    if not DEEPSEEK_API_KEY:
+        raise ValueError("DEEPSEEK_API_KEY is not configured")
+
+    schema = Receipt.model_json_schema()
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You extract receipt data from OCR markdown. "
+                    "Return only valid JSON matching the provided schema."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"{receipt_markdown_prompt}\n\n"
+                    f"JSON schema:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
+                    f"Markdown:\n{markdown}"
+                ),
+            },
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0,
+    }
+
+    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+        response = client.post(
+            f"{DEEPSEEK_API_BASE.rstrip('/')}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+    content = result["choices"][0]["message"]["content"]
+    return Receipt.model_validate_json(content)
 
 
 def parse_receipt_image(img) -> Receipt:
-    model = init_chat_model(
-        model=OPENROUTER_MODEL,
-        api_key=OPENROUTER_API_KEY,
-        model_provider="openai",
-    ).with_structured_output(Receipt, method="function_calling")
-
-    message = HumanMessage(
-        content=[
-            {"type": "text", "text": img_prompt},
-            {"type": "image_url", "image_url": gr_img_to_b64(img)},
-        ]
-    )
-    response = model.invoke([message])
-    return response
+    markdown = mineru_parse_markdown(img)
+    return extract_receipt_from_markdown(markdown)
 
 
 def to_dataframe(receipt: Receipt) -> pd.DataFrame:

@@ -12,7 +12,8 @@
    - 图片立即显示出来方便校对
 
 2. **点击“识别收据”**
-   - 用 OpenRouter 上的 VLM（比如 Gemini）解析出结构化数据
+   - 先用 MinerU 精准解析接口把图片解析成 Markdown
+   - 再用 DeepSeek 从 Markdown 抽取出结构化数据
    - 表格展示可编辑的商品信息（名称、货号、数量、单价等）
 
 3. **点击“提交至 Quartzy”**
@@ -20,16 +21,17 @@
 
 ---
 
-### 模型提示词（`img_prompt`）
-在代码里定义了一个提示词，告诉模型怎么解析收据、遇到不确定信息怎么处理、一些品牌缩写怎么写等。
+### 模型提示词（`receipt_markdown_prompt`）
+在代码里定义了一个提示词，告诉 DeepSeek 怎么从 MinerU 解析出的 Markdown 里抽取收据、遇到不确定信息怎么处理、一些品牌缩写怎么写等。
 
-你可以直接改 `img_prompt` 里的内容来适配你自己的需求，或者以后扩展支持英文收据。
+你可以直接改 `receipt_markdown_prompt` 里的内容来适配你自己的需求，或者以后扩展支持英文收据。
 
 ---
 
 
 你还需要配置：
-- OpenRouter API Key
+- MinerU API Key
+- DeepSeek API Key
 - Quartzy API Token
 - 你的实验室 ID 和 type ID
 
