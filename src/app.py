@@ -501,7 +501,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    left_col, work_col, action_col = st.columns([1.15, 3.6, 0.42], gap="large")
+    left_col, work_col = st.columns([1.15, 4.02], gap="large")
 
     if "receipts" not in st.session_state:
         st.session_state.receipts = {}
@@ -619,10 +619,7 @@ def main() -> None:
     with work_col:
         render_html_text(record["name"], "receipt-title", 92)
 
-        parsing_current = record.get("parse_future") is not None
-        if st.button("识别当前收据", disabled=parsing_current):
-            submit_parse_task(record)
-            st.rerun()
+        action_bar = st.container()
 
         if record["parse_error"]:
             st.error(record["parse_error"])
@@ -643,25 +640,34 @@ def main() -> None:
             st.image(record["image"], use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    with action_col:
-        st.write("")
-        st.write("")
-        if st.button(
-            "提交",
-            disabled=edited_table.empty,
-            use_container_width=True,
-        ):
-            with st.spinner("正在提交至 Quartzy..."):
-                (
-                    record["submit_result"],
-                    record["quartzy_uploaded_file"],
-                ) = submit_all(
-                    edited_table,
-                    record["image"],
-                    record["name"],
-                    record.get("quartzy_uploaded_file"),
-                )
-            st.rerun()
+        with action_bar:
+            parse_col, submit_col, spacer_col = st.columns([1, 1, 4], gap="small")
+            parsing_current = record.get("parse_future") is not None
+            with parse_col:
+                if st.button(
+                    "识别当前收据",
+                    disabled=parsing_current,
+                    use_container_width=True,
+                ):
+                    submit_parse_task(record)
+                    st.rerun()
+            with submit_col:
+                if st.button(
+                    "提交",
+                    disabled=edited_table.empty,
+                    use_container_width=True,
+                ):
+                    with st.spinner("正在提交至 Quartzy..."):
+                        (
+                            record["submit_result"],
+                            record["quartzy_uploaded_file"],
+                        ) = submit_all(
+                            edited_table,
+                            record["image"],
+                            record["name"],
+                            record.get("quartzy_uploaded_file"),
+                        )
+                    st.rerun()
 
     if active_parse_count:
         time.sleep(1)
