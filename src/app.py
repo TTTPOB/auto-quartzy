@@ -45,6 +45,7 @@ TABLE_ROW_HEIGHT = 36
 TABLE_EXTRA_HEIGHT = 18
 TABLE_MIN_HEIGHT = 96
 TABLE_MAX_HEIGHT = 360
+GALLERY_SCROLL_HEIGHT = 660
 
 receipt_markdown_prompt = """
 请从下面的收据 Markdown 中抽取信息，输出必须严格符合给定 JSON schema。
@@ -580,37 +581,38 @@ def main() -> None:
             ):
                 st.rerun()
 
-        for file_id in current_ids:
-            gallery_record = st.session_state.receipts[file_id]
-            selected = file_id == st.session_state.selected_receipt_id
-            card_class = "receipt-gallery-card selected" if selected else "receipt-gallery-card"
-            image_col, select_col = st.columns([5, 1], gap="small")
-            with image_col:
-                st.markdown(
-                    (
-                        f'<div class="{card_class}">'
-                        f'<img src="{gallery_record["thumbnail_url"]}" alt="">'
-                        f'<div class="receipt-gallery-caption">'
-                        f'{html.escape(gallery_record["name"])} '
-                        f'{html.escape(gallery_record["parse_status"])}'
-                        "</div></div>"
-                    ),
-                    unsafe_allow_html=True,
-                )
-            with select_col:
-                st.markdown(
-                    '<div class="receipt-gallery-select">',
-                    unsafe_allow_html=True,
-                )
-                st.button(
-                    "选择",
-                    key=f"select_{file_id}",
-                    disabled=selected,
-                    use_container_width=True,
-                    on_click=select_receipt,
-                    args=(file_id,),
-                )
-                st.markdown("</div>", unsafe_allow_html=True)
+        with st.container(height=GALLERY_SCROLL_HEIGHT, border=False):
+            for file_id in current_ids:
+                gallery_record = st.session_state.receipts[file_id]
+                selected = file_id == st.session_state.selected_receipt_id
+                card_class = "receipt-gallery-card selected" if selected else "receipt-gallery-card"
+                image_col, select_col = st.columns([5, 1], gap="small")
+                with image_col:
+                    st.markdown(
+                        (
+                            f'<div class="{card_class}">'
+                            f'<img src="{gallery_record["thumbnail_url"]}" alt="">'
+                            f'<div class="receipt-gallery-caption">'
+                            f'{html.escape(gallery_record["name"])} '
+                            f'{html.escape(gallery_record["parse_status"])}'
+                            "</div></div>"
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                with select_col:
+                    st.markdown(
+                        '<div class="receipt-gallery-select">',
+                        unsafe_allow_html=True,
+                    )
+                    st.button(
+                        "选择",
+                        key=f"select_{file_id}",
+                        disabled=selected,
+                        use_container_width=True,
+                        on_click=select_receipt,
+                        args=(file_id,),
+                    )
+                    st.markdown("</div>", unsafe_allow_html=True)
 
     record = st.session_state.receipts[st.session_state.selected_receipt_id]
 
