@@ -1,4 +1,6 @@
+import base64
 import hashlib
+import html
 import io
 import json
 import tempfile
@@ -32,6 +34,11 @@ MINERU_POLL_INTERVAL_SECONDS = 5
 MINERU_MAX_POLLS = 60
 GALLERY_COLUMNS = 4
 MAX_PARSE_CONCURRENCY = 5
+TABLE_HEADER_HEIGHT = 38
+TABLE_ROW_HEIGHT = 36
+TABLE_EXTRA_HEIGHT = 18
+TABLE_MIN_HEIGHT = 96
+TABLE_MAX_HEIGHT = 360
 
 receipt_markdown_prompt = """
 请从下面的收据 Markdown 中抽取信息，输出必须严格符合给定 JSON schema。
@@ -60,6 +67,13 @@ def image_to_jpeg_bytes(img: Image.Image) -> bytes:
     buf = io.BytesIO()
     pil_img.save(buf, format="JPEG")
     return buf.getvalue()
+
+
+def image_to_data_url(img: Image.Image, max_size: tuple[int, int] = (360, 240)) -> str:
+    thumbnail = img.copy()
+    thumbnail.thumbnail(max_size)
+    encoded = base64.b64encode(image_to_jpeg_bytes(thumbnail)).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
 
 
 def mineru_parse_markdown(img: Image.Image) -> str:
@@ -236,11 +250,30 @@ def uploaded_file_id(file) -> str:
     return hashlib.sha256(file.getvalue()).hexdigest()
 
 
+def dataframe_editor_height(df: pd.DataFrame) -> int:
+    visible_rows = max(len(df), 1)
+    height = TABLE_HEADER_HEIGHT + visible_rows * TABLE_ROW_HEIGHT + TABLE_EXTRA_HEIGHT
+    return min(max(height, TABLE_MIN_HEIGHT), TABLE_MAX_HEIGHT)
+
+
+def render_html_text(content: str, class_name: str, min_height: int) -> None:
+    # st.html lets the browser size this text block directly; st.markdown inside
+    # fixed-height containers can clip CJK text and long filenames at the top.
+    st.html(
+        (
+            f'<div class="{class_name}" '
+            f'style="min-height:{min_height}px;">'
+            f"{html.escape(content)}</div>"
+        )
+    )
+
+
 def empty_receipt_record(file_id: str, name: str, image: Image.Image) -> Dict:
     return {
         "id": file_id,
         "name": name,
         "image": image,
+        "thumbnail_url": image_to_data_url(image),
         "df": pd.DataFrame(columns=DF_COLNAMES),
         "json": None,
         "submit_result": None,
@@ -298,13 +331,84 @@ def submit_parse_task(record: Dict) -> bool:
 
 def main() -> None:
     st.set_page_config(page_title="收据识别与库存提交", layout="wide")
-    st.title("收据识别与库存提交")
-
-    uploaded_files = st.file_uploader(
-        "上传收据图片",
-        type=["jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=True,
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.25rem;
+            padding-bottom: 1.25rem;
+            max-width: 100%;
+        }
+        .receipt-title {
+            display: flex;
+            align-items: center;
+            font-size: 1.95rem;
+            font-weight: 700;
+            line-height: 1.45;
+            white-space: normal;
+            overflow-wrap: anywhere;
+            padding: 0.85rem 0 0.75rem;
+            margin: 0;
+            box-sizing: border-box;
+        }
+        .empty-state {
+            display: flex;
+            align-items: center;
+            padding: 1rem 1.1rem;
+            border-radius: 0.5rem;
+            background: rgba(46, 134, 193, 0.16);
+            color: #1c7ed6;
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+            box-sizing: border-box;
+        }
+        div[data-testid="stImage"] img {
+            object-fit: contain;
+        }
+        .receipt-gallery-item {
+            display: block;
+            border: 1px solid rgba(49, 51, 63, 0.2);
+            border-radius: 6px;
+            padding: 0.35rem;
+            margin-bottom: 0.65rem;
+            color: inherit;
+            text-decoration: none;
+        }
+        .receipt-gallery-item:hover {
+            border-color: rgba(49, 51, 63, 0.55);
+            background: rgba(49, 51, 63, 0.04);
+        }
+        .receipt-gallery-item.selected {
+            border-color: #ff4b4b;
+            background: rgba(255, 75, 75, 0.08);
+        }
+        .receipt-gallery-item img {
+            display: block;
+            width: 100%;
+            max-height: 150px;
+            object-fit: contain;
+        }
+        .receipt-gallery-caption {
+            margin-top: 0.35rem;
+            font-size: 0.82rem;
+            line-height: 1.35;
+            overflow-wrap: anywhere;
+            white-space: normal;
+        }
+        .receipt-preview div[data-testid="stImage"] img {
+            max-height: 520px;
+        }
+        div[data-testid="stDataFrame"] div[role="columnheader"],
+        div[data-testid="stDataFrame"] div[role="gridcell"] {
+            min-height: 34px;
+            line-height: 1.25;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
+
+    left_col, work_col, action_col = st.columns([1.15, 3.6, 0.42], gap="large")
 
     if "receipts" not in st.session_state:
         st.session_state.receipts = {}
@@ -314,6 +418,17 @@ def main() -> None:
         st.session_state.selected_receipt_id = None
 
     collect_parse_results()
+
+    selected_from_query = st.query_params.get("selected")
+    if selected_from_query in st.session_state.receipts:
+        st.session_state.selected_receipt_id = selected_from_query
+
+    with left_col:
+        uploaded_files = st.file_uploader(
+            "上传收据图片",
+            type=["jpg", "jpeg", "png", "webp"],
+            accept_multiple_files=True,
+        )
 
     current_ids = []
     for uploaded_file in uploaded_files:
@@ -341,71 +456,100 @@ def main() -> None:
         st.session_state.selected_receipt_id = None
 
     if not current_ids:
-        st.info("上传一张或多张收据图片后开始识别。")
+        with work_col:
+            render_html_text(
+                "上传一张或多张收据图片后开始识别。",
+                "empty-state",
+                86,
+            )
         return
 
-    control_cols = st.columns([1, 1, 3])
-    with control_cols[0]:
-        if st.button("识别全部未识别", disabled=not current_ids):
-            for file_id in current_ids:
-                record = st.session_state.receipts[file_id]
-                if record["parse_status"] in {"未识别", "识别失败"}:
-                    submit_parse_task(record)
-            st.rerun()
-    with control_cols[1]:
-        active_parse_count = sum(
-            1
-            for record in st.session_state.receipts.values()
-            if record.get("parse_future") is not None
-        )
-        if st.button("刷新状态", disabled=active_parse_count == 0):
-            st.rerun()
+    active_parse_count = sum(
+        1
+        for record in st.session_state.receipts.values()
+        if record.get("parse_future") is not None
+    )
 
-    st.subheader("图片")
-    for offset in range(0, len(current_ids), GALLERY_COLUMNS):
-        cols = st.columns(GALLERY_COLUMNS)
-        for col, file_id in zip(cols, current_ids[offset : offset + GALLERY_COLUMNS]):
-            record = st.session_state.receipts[file_id]
-            with col:
-                st.image(record["image"], caption=record["name"], use_container_width=True)
-                st.caption(record["parse_status"])
-                selected = file_id == st.session_state.selected_receipt_id
-                if st.button(
-                    "当前" if selected else "选择",
-                    key=f"select_{file_id}",
-                    disabled=selected,
-                    use_container_width=True,
-                ):
-                    st.session_state.selected_receipt_id = file_id
-                    st.rerun()
+    with left_col:
+        gallery_actions = st.columns(2)
+        with gallery_actions[0]:
+            all_disabled = not any(
+                st.session_state.receipts[file_id]["parse_status"]
+                in {"未识别", "识别失败"}
+                for file_id in current_ids
+            )
+            if st.button("识别全部", disabled=all_disabled, use_container_width=True):
+                for file_id in current_ids:
+                    record = st.session_state.receipts[file_id]
+                    if record["parse_status"] in {"未识别", "识别失败"}:
+                        submit_parse_task(record)
+                st.rerun()
+        with gallery_actions[1]:
+            if st.button(
+                "刷新",
+                disabled=active_parse_count == 0,
+                use_container_width=True,
+            ):
+                st.rerun()
+
+        st.markdown('<div class="receipt-gallery">', unsafe_allow_html=True)
+        for file_id in current_ids:
+            gallery_record = st.session_state.receipts[file_id]
+            selected = file_id == st.session_state.selected_receipt_id
+            item_class = "receipt-gallery-item selected" if selected else "receipt-gallery-item"
+            st.markdown(
+                (
+                    f'<a class="{item_class}" href="?selected={file_id}">'
+                    f'<img src="{gallery_record["thumbnail_url"]}" alt="">'
+                    f'<div class="receipt-gallery-caption">'
+                    f'{html.escape(gallery_record["name"])}'
+                    f'<br>{html.escape(gallery_record["parse_status"])}'
+                    "</div></a>"
+                ),
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
 
     record = st.session_state.receipts[st.session_state.selected_receipt_id]
 
-    st.divider()
-    st.subheader(record["name"])
+    with work_col:
+        render_html_text(record["name"], "receipt-title", 92)
 
-    parsing_current = record.get("parse_future") is not None
-    if st.button("识别当前收据", disabled=parsing_current):
-        submit_parse_task(record)
-        st.rerun()
+        parsing_current = record.get("parse_future") is not None
+        if st.button("识别当前收据", disabled=parsing_current):
+            submit_parse_task(record)
+            st.rerun()
 
-    if record["parse_error"]:
-        st.error(record["parse_error"])
+        if record["parse_error"]:
+            st.error(record["parse_error"])
 
-    edited_table = st.data_editor(
-        record["df"],
-        num_rows="dynamic",
-        use_container_width=True,
-        key=f"receipt_editor_{record['id']}_{record['editor_version']}",
-    )
-    record["df"] = edited_table
+        edited_table = st.data_editor(
+            record["df"],
+            num_rows="dynamic",
+            use_container_width=True,
+            height=dataframe_editor_height(record["df"]),
+            key=f"receipt_editor_{record['id']}_{record['editor_version']}",
+        )
+        record["df"] = edited_table
 
-    if st.button("提交至 Quartzy", disabled=edited_table.empty):
-        with st.spinner("正在提交至 Quartzy..."):
-            record["submit_result"] = submit_all(edited_table)
+        st.markdown('<div class="receipt-preview">', unsafe_allow_html=True)
+        if record["submit_result"] is not None:
+            st.json(record["submit_result"])
+        else:
+            st.image(record["image"], use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    if record["submit_result"] is not None:
-        st.json(record["submit_result"])
+    with action_col:
+        st.write("")
+        st.write("")
+        if st.button(
+            "提交",
+            disabled=edited_table.empty,
+            use_container_width=True,
+        ):
+            with st.spinner("正在提交至 Quartzy..."):
+                record["submit_result"] = submit_all(edited_table)
+            st.rerun()
 
     if active_parse_count:
         time.sleep(1)
