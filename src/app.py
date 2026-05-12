@@ -344,6 +344,10 @@ def dataframe_editor_height(df: pd.DataFrame) -> int:
     return min(max(height, TABLE_MIN_HEIGHT), TABLE_MAX_HEIGHT)
 
 
+def dataframes_equal(left: pd.DataFrame, right: pd.DataFrame) -> bool:
+    return left.reset_index(drop=True).equals(right.reset_index(drop=True))
+
+
 def render_html_text(content: str, class_name: str, min_height: int) -> None:
     # st.html lets the browser size this text block directly; st.markdown inside
     # fixed-height containers can clip CJK text and long filenames at the top.
@@ -636,7 +640,10 @@ def main() -> None:
             height=dataframe_editor_height(record["df"]),
             key=f"receipt_editor_{record['id']}_{record['editor_version']}",
         )
-        record["df"] = edited_table
+        if not dataframes_equal(edited_table, record["df"]):
+            record["df"] = edited_table.copy()
+            record["editor_version"] += 1
+            st.rerun()
 
         st.markdown('<div class="receipt-preview">', unsafe_allow_html=True)
         if record["submit_result"] is not None:
