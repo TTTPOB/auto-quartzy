@@ -202,15 +202,16 @@ def parse_receipt_image(img) -> Receipt:
 
 
 def to_dataframe(receipt: Receipt) -> pd.DataFrame:
+    receipt_date = receipt.date.isoformat() if receipt.date is not None else ""
     df_factory = {}
-    df_factory["名称"] = [item.name for item in receipt.items]
-    df_factory["货号"] = [item.stock_id for item in receipt.items]
+    df_factory["名称"] = [item.name or "" for item in receipt.items]
+    df_factory["货号"] = [item.stock_id or "" for item in receipt.items]
     df_factory["数量"] = [item.quantity for item in receipt.items]
-    df_factory["单位"] = [item.unit for item in receipt.items]
+    df_factory["单位"] = [item.unit or "" for item in receipt.items]
     df_factory["单价"] = [item.price for item in receipt.items]
-    df_factory["供应商"] = [item.vendor for item in receipt.items]
-    df_factory["备注"] = [item.comment for item in receipt.items]
-    df_factory["时间"] = [receipt.date for _ in receipt.items]
+    df_factory["供应商"] = [item.vendor or "" for item in receipt.items]
+    df_factory["备注"] = [item.comment or "" for item in receipt.items]
+    df_factory["时间"] = [receipt_date for _ in receipt.items]
     return pd.DataFrame(df_factory)
 
 
