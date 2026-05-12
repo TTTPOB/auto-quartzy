@@ -374,13 +374,18 @@ def main() -> None:
             border-radius: 7px;
             padding: 7px;
             box-sizing: border-box;
+            height: 220px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
         }
         .receipt-gallery-card.selected {
             border-color: #ff4b4b;
             box-shadow: inset 0 0 0 2px #ff4b4b;
         }
         .receipt-gallery-card img {
-            max-height: 155px;
+            height: 155px;
+            width: 100%;
             object-fit: contain;
         }
         .receipt-gallery-caption {
@@ -388,9 +393,12 @@ def main() -> None:
             font-size: 0.92rem;
             line-height: 1.35;
             overflow-wrap: anywhere;
+            max-height: 46px;
+            overflow: hidden;
         }
         .receipt-gallery-select button {
-            min-height: 155px;
+            min-height: 220px;
+            height: 220px;
             padding: 0.5rem 0.25rem;
             white-space: normal;
             word-break: keep-all;
