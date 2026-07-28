@@ -233,6 +233,16 @@ def df_to_quartzy_requests(df: pd.DataFrame) -> List[QuartzyRequest]:
     return requests
 
 
+def receipt_attachment_reference(
+    request_name: str, receipt_date: object, order_result: dict
+) -> str:
+    reference = f"Receipt image attached to: {request_name} (Date: {receipt_date})"
+    app_url = order_result.get("app_url")
+    if isinstance(app_url, str) and app_url:
+        return f"{reference}\n{app_url}"
+    return reference
+
+
 def process_receipts(img: Image.Image) -> tuple:
     receipt = parse_receipt_image(img)
     df_data = to_dataframe(receipt)
@@ -246,23 +256,19 @@ def submit_all(
     uploaded_file: QuartzyUploadedFile | None = None,
 ) -> tuple[List[Dict], QuartzyUploadedFile | None]:
     results = []
-    if uploaded_file is None:
-        try:
-            uploaded_file = upload_receipt_image(
-                image_to_jpeg_bytes(receipt_image),
-                attachment_filename(receipt_name),
-                "image/jpeg",
-            )
-        except Exception as exc:
-            return [
-                {
-                    "order_request": None,
-                    "attachment": None,
-                    "error": f"Receipt image upload failed before creating order requests: {exc}",
-                }
-            ], None
+    requests = df_to_quartzy_requests(
+        pd.DataFrame(edited_table, columns=DF_COLNAMES)
+    )
+    receipt_reference = None
+    first_receipt_date = edited_table.iloc[0]["时间"] if requests else ""
 
-    for req in df_to_quartzy_requests(pd.DataFrame(edited_table, columns=DF_COLNAMES)):
+    for index, original_req in enumerate(requests):
+        req = original_req
+        if receipt_reference is not None:
+            req = req.model_copy(
+                update={"notes": f"{req.notes}\n\n{receipt_reference}"}
+            )
+
         response = httpx.post(
             f"{QUARTZY_API_BASE}/order-requests",
             headers={
@@ -288,23 +294,37 @@ def submit_all(
         attachment_result = None
         attachment_error = None
         order_request_id, order_request_id_source = extract_order_request_uuid(order_result)
-        if uploaded_file is not None and order_request_id:
-            if not uploaded_file.uuid:
+        if index == 0:
+            if uploaded_file is None:
+                try:
+                    uploaded_file = upload_receipt_image(
+                        image_to_jpeg_bytes(receipt_image),
+                        attachment_filename(receipt_name),
+                        "image/jpeg",
+                    )
+                except Exception as exc:
+                    attachment_error = f"Receipt image upload failed: {exc}"
+
+            if attachment_error is None and not order_request_id:
+                attachment_error = (
+                    "Could not find the UUID required by "
+                    "attachFileToOrderRequest.input.orderRequestId in Quartzy API response."
+                )
+            elif attachment_error is None and not uploaded_file.uuid:
                 attachment_error = "Quartzy createFile response did not include file uuid."
-            else:
+            elif attachment_error is None:
                 try:
                     attachment_result = attach_uploaded_file_to_order_request(
                         uploaded_file.uuid,
                         order_request_id,
                     )
-                    attachment_error = None
+                    receipt_reference = receipt_attachment_reference(
+                        req.name,
+                        first_receipt_date,
+                        order_result,
+                    )
                 except Exception as exc:
                     attachment_error = str(exc)
-        elif uploaded_file is not None:
-            attachment_error = (
-                "Could not find the UUID required by "
-                "attachFileToOrderRequest.input.orderRequestId in Quartzy API response."
-            )
 
         results.append(
             {
